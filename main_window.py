@@ -328,11 +328,12 @@ class ImportCsvDialog(QtWidgets.QDialog):
 
 # --------------- Main Window ---------------
 class VaultMainWindow(QtWidgets.QMainWindow):
-    def __init__(self, vault: Vault, db_path: str, autoclipper_seconds: int = 15):
+    def __init__(self, vault: Vault, db_path: str, autoclipper_seconds: int = 15, on_lock=None):
         super().__init__()
         self.vault = vault
         self.db_path = db_path
         self.autoclipper_seconds = autoclipper_seconds
+        self.on_lock_cb = on_lock
 
         self.setWindowTitle("Lock Box — Vault")
         self.resize(900, 540)
@@ -408,6 +409,10 @@ class VaultMainWindow(QtWidgets.QMainWindow):
         act_copy.setShortcut(QtGui.QKeySequence("Ctrl+Shift+C"))
 
     # ---- helpers ----
+    def lock_and_return(self):
+        # Just close; closeEvent handles DB + callback
+        self.close()
+
     def _selected_entry_id(self) -> Optional[int]:
         sel = self.table.selectionModel().selectedRows()
         if not sel:
@@ -426,30 +431,50 @@ class VaultMainWindow(QtWidgets.QMainWindow):
     # ---- Cloud Sync (file-based) ----
     def on_set_cloud_folder(self):
         folder = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Select a cloud-synced folder (OneDrive/Dropbox/iCloud Drive)"
+            self, "Select a sync folder (Dropbox/Google Drive/Syncthing/etc.)"
         )
         if not folder:
             return
 
-        lockbox_dir = os.path.join(folder, "LockBox")
+        def norm(p: str) -> str:
+            return os.path.normcase(os.path.normpath(os.path.abspath(p)))
+
+        chosen = norm(folder)
+
+        # If the user already selected a folder named "LockBox", don't create LockBox/LockBox.
+        base_name = os.path.basename(chosen.rstrip("\\/"))
+        if base_name.lower() == "lockbox":
+            lockbox_dir = chosen
+        else:
+            lockbox_dir = norm(os.path.join(folder, "LockBox"))
+
         os.makedirs(lockbox_dir, exist_ok=True)
 
-        new_db_path = os.path.join(lockbox_dir, os.path.basename(self.db_path))
+        current_db = norm(self.db_path)
+        dest_db = norm(os.path.join(lockbox_dir, os.path.basename(self.db_path)))
 
-        # NOTE: copying while the DB is open is usually OK, but safest is to flush and close first.
+        # If we're already using a DB inside that LockBox folder (same exact file), do nothing.
+        if current_db == dest_db:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Cloud Sync",
+                "This vault is already located in the selected LockBox sync folder.\n\n"
+                f"{self.db_path}"
+            )
+            return
+
+        # Best effort flush + close before copying
         try:
             self.vault.conn.commit()
         except Exception:
             pass
-
-        # Best effort: close to avoid copying a partially-written file.
         try:
             self.vault.conn.close()
         except Exception:
             pass
 
         try:
-            shutil.copy2(self.db_path, new_db_path)
+            shutil.copy2(self.db_path, dest_db)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Copy failed", str(e))
             return
@@ -457,15 +482,12 @@ class VaultMainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.information(
             self,
             "Cloud Sync Enabled",
-            "Vault copied to a cloud folder:\n\n"
-            f"{new_db_path}\n\n"
+            "Vault copied to:\n\n"
+            f"{dest_db}\n\n"
             "Next step:\n"
-            "- Close this window\n"
-            "- Re-open Lock Box and select that new vault.db path\n\n"
-            "Tip: Avoid opening the same vault on two devices at the same time."
+            "- Re-open Lock Box and select that vault.db path.\n"
+            "Tip: avoid opening the same vault on two devices at the same time."
         )
-
-        # Close after migrating so the user re-opens from the new location cleanly.
         self.close()
 
     # ---- CSV Import ----
@@ -573,7 +595,23 @@ class VaultMainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage("Refreshed.", 2000)
 
     def on_lock(self):
-        self.close()
+        self.lock_and_return()
+
+    def closeEvent(self, event: QtGui.QCloseEvent):
+        # If user closes the window (X or Lock), clean up and return to login
+        if callable(getattr(self, "on_lock_cb", None)):
+            try:
+                if getattr(self, "vault", None) and getattr(self.vault, "conn", None):
+                    self.vault.conn.commit()
+            except Exception:
+                pass
+            try:
+                if getattr(self, "vault", None) and getattr(self.vault, "conn", None):
+                    self.vault.conn.close()
+            except Exception:
+                pass
+            self.on_lock_cb()
+        event.accept()
 
 
 # --------------- Standalone run (optional) ---------------

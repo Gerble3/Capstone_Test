@@ -1,6 +1,7 @@
-# login.py (PyQt6) — clean version
+# login.py (PyQt6) — fixed: editable DB path + visible caret
 import os
 import sys
+
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from main_window import VaultMainWindow
@@ -8,10 +9,12 @@ from cloud_vault.db import open_vault, init_vault
 
 APP_TITLE = "Lock Box — Master Login"
 
+
 # ---------- Threading helpers ----------
 class WorkerSignals(QtCore.QObject):
-    done  = QtCore.pyqtSignal(object)
+    done = QtCore.pyqtSignal(object)
     error = QtCore.pyqtSignal(str)
+
 
 class Worker(QtCore.QRunnable):
     """Run a function in a background thread and emit results/errors to the UI."""
@@ -31,6 +34,7 @@ class Worker(QtCore.QRunnable):
         except Exception as e:
             self.signals.error.emit(str(e))
 
+
 # ---------- UI ----------
 class LoginWindow(QtWidgets.QWidget):
     def __init__(self):
@@ -42,16 +46,26 @@ class LoginWindow(QtWidgets.QWidget):
         self.thread_pool = QtCore.QThreadPool.globalInstance()
         self._workers = set()
 
+        # Settings (remember last DB path)
+        self.settings = QtCore.QSettings("Clayton", "LockBox")
+
         # Title
-        self.title = QtWidgets.QLabel("<h2>🔐 Lock Box</h2><div>Open an existing vault or create a new one.</div>")
+        self.title = QtWidgets.QLabel(
+            "<h2>🔐 Lock Box</h2><div>Open an existing vault or create a new one.</div>"
+        )
         self.title.setTextFormat(QtCore.Qt.TextFormat.RichText)
 
-        # DB path row
+        # --- DB path row (EDITABLE AGAIN) ---
         self.db_label = QtWidgets.QLabel("Vault database (.db):")
-        self.db_path = QtWidgets.QLineEdit(os.path.abspath("vault.db"))
+
+        self.db_path = QtWidgets.QLineEdit()
+        self.db_path.setPlaceholderText(
+            r"Type or browse to a vault file (e.g., C:\...\LockBox\vault.db)"
+        )
+
         self.db_browse = QtWidgets.QToolButton()
-        self.db_browse.setText("…")
-        self.db_browse.setToolTip("Browse for an existing or new .db file")
+        self.db_browse.setText("Browse…")
+        self.db_browse.setToolTip("Select an existing or new .db file")
 
         path_row = QtWidgets.QHBoxLayout()
         path_row.addWidget(self.db_path, 1)
@@ -105,13 +119,32 @@ class LoginWindow(QtWidgets.QWidget):
         self.init_btn.clicked.connect(self.on_init)
         self.open_btn.clicked.connect(self.on_open)
 
-        # Settings (remember last DB path)
-        self.settings = QtCore.QSettings("Clayton", "LockBox")
+        # Load last DB path (or default)
         last = self.settings.value("last_db_path", type=str)
         if last and os.path.exists(os.path.dirname(last)):
-            self.db_path.setText(last)
+            self._set_db_path(last)
+        else:
+            self._set_db_path("vault.db")
 
     # ---------- Helpers ----------
+
+    def _return_to_login(self):
+        # clear sensitive input when coming back
+        self.password.clear()
+        self.set_busy(False, "")
+        self.show()
+        self.activateWindow()
+        self.raise_()
+
+    def _set_db_path(self, full_path: str):
+        p = os.path.abspath(full_path)
+        self.db_path.setText(p)
+        self.db_path.setToolTip(p)
+
+    def _get_db_path(self) -> str:
+        p = self.db_path.text().strip()
+        return os.path.abspath(p) if p else ""
+
     def set_busy(self, busy: bool, msg: str = ""):
         for w in (self.init_btn, self.open_btn, self.db_browse, self.password, self.db_path):
             w.setDisabled(busy)
@@ -144,11 +177,19 @@ class LoginWindow(QtWidgets.QWidget):
 
     # ---------- Slots ----------
     def on_browse(self):
-        dlg = QtWidgets.QFileDialog(self, "Select or create a vault database", self.db_path.text())
+        current = self._get_db_path()
+        if current:
+            start_dir = os.path.dirname(current)
+            if not os.path.isdir(start_dir):
+                start_dir = os.path.expanduser("~")
+        else:
+            start_dir = os.path.expanduser("~")
+
+        dlg = QtWidgets.QFileDialog(self, "Select or create a vault database", start_dir)
         dlg.setNameFilter("SQLite DB (*.db *.sqlite);;All Files (*)")
         dlg.setAcceptMode(QtWidgets.QFileDialog.AcceptMode.AcceptOpen)
         if dlg.exec():
-            self.db_path.setText(dlg.selectedFiles()[0])
+            self._set_db_path(dlg.selectedFiles()[0])
 
     def on_show_pw(self, checked: bool):
         self.password.setEchoMode(
@@ -156,14 +197,16 @@ class LoginWindow(QtWidgets.QWidget):
         )
 
     def on_init(self):
-        db = self.db_path.text().strip()
+        db = self._get_db_path()
         pw = self.password.text()
+
         if not db:
-            QtWidgets.QMessageBox.warning(self, "Missing", "Please select a database path.")
+            QtWidgets.QMessageBox.warning(self, "Missing", "Please enter or select a database path.")
             return
         if not pw:
             QtWidgets.QMessageBox.warning(self, "Missing", "Please enter a master password.")
             return
+
         if os.path.exists(db) and os.path.getsize(db) > 0:
             resp = QtWidgets.QMessageBox.question(
                 self, "Overwrite?",
@@ -174,12 +217,16 @@ class LoginWindow(QtWidgets.QWidget):
                 return
 
         self.set_busy(True, "Initializing vault…")
-        self.run_bg(init_vault, db, pw, success_msg="Vault initialized.",
-                    after=lambda vault: self.post_login(db, vault))
+        self.run_bg(
+            init_vault, db, pw,
+            success_msg="Vault initialized.",
+            after=lambda vault: self.post_login(db, vault),
+        )
 
     def on_open(self):
-        db = self.db_path.text().strip()
+        db = self._get_db_path()
         pw = self.password.text()
+
         if not os.path.exists(db):
             QtWidgets.QMessageBox.warning(self, "Not found", "Database file does not exist.")
             return
@@ -188,17 +235,32 @@ class LoginWindow(QtWidgets.QWidget):
             return
 
         self.set_busy(True, "Unlocking…")
-        self.run_bg(open_vault, db, pw, success_msg="Unlocked.",
-                    after=lambda vault: self.post_login(db, vault))
+        self.run_bg(
+            open_vault, db, pw,
+            success_msg="Unlocked.",
+            after=lambda vault: self.post_login(db, vault),
+        )
 
     def post_login(self, db_path: str, vault):
-        # persist last path
         if self.remember_path.isChecked():
             self.settings.setValue("last_db_path", db_path)
-        # open main window and hide login
-        self.main = VaultMainWindow(vault, db_path)  # keep a reference
+
+        # show vault, hide login
+        self.main = VaultMainWindow(
+            vault,
+            db_path,
+            on_lock=self._return_to_login  # NEW
+        )
         self.main.show()
         self.hide()
+
+    def _return_to_login(self):
+        # optional: clear password field when returning
+        self.password.clear()
+        self.set_busy(False, "")
+        self.show()
+        self.activateWindow()
+        self.raise_()
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
@@ -211,6 +273,7 @@ def main():
     w.resize(560, 260)
     w.show()
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()
