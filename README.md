@@ -27,8 +27,8 @@ python login.py
 ```
 ```
 
-##Project Overview
 ```
+##Project Overview
 Desktop UI (PyQt6)
 
 - Master login screen to create or unlock a vault
