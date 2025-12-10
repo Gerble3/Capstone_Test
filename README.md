@@ -9,17 +9,6 @@ A vault encryption key is protected by the master password and used to encrypt/d
 Entries include: title, URL, username, password, notes
 
 A clean PyQt6 interface allows adding/editing/deleting entries, searching, importing CSVs, and copying passwords safely to the clipboard (auto-clear)
-# Cloud Vault Core Tools
-
-Backend scaffold for The Lockbox.
-Includes:
-- **Argon2id** KDF (argon2-cffi) to derive a master key from password
-- **AES-GCM** for authenticated encryption (cryptography)
-- **SQLite** schema + safe PRAGMAs
-- CRUD for entries (title/url/username/password/notes)
-- Simple CLI demo to init/open vault and add/list entries
-- Unit tests (pytest)
-
 
 ## Setup
 ```bash
@@ -71,6 +60,4 @@ Important: this is file-based sync, not a server-based system, and should not be
 ## Notes
 - The vault stores a random **vault_key** encrypted ("wrapped") by a master key derived with Argon2id.
 - Each sensitive field is encrypted with **fresh nonces** using AES-GCM.
-- **No plaintext** is written to disk by this code beyond what you pass on the command line (avoid using `--pw` in real use; supply via prompt).
-- Add the Qt UI in Week 5–6 and call these functions from your slots.
 - REMINDER login.py and main_window.py are 1 level up in the file tree from the other files, those 2 files sit in the CAPTONE folder and not the cloud_vault
