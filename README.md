@@ -20,7 +20,7 @@ pip install -r requirements.txt
 #on macOS 
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r cloud_vault/requirements.txt
 python login.py
 ```
 
